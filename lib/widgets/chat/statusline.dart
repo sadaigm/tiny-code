@@ -32,7 +32,7 @@ class Statusline extends StatelessWidget {
         .toList();
     final cwd = cwdParts.isEmpty ? 'cwd' : cwdParts.last;
     final id = app.activeSessionId;
-    final session = id == null ? '—' : id;
+    final session = id ?? '—';
     final mode = app.planMode
         ? 'plan'
         : app.chatMode

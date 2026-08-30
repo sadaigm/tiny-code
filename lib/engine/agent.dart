@@ -79,7 +79,7 @@ class Agent {
   List<Message> messages = [];
   PermissionMode _permissionMode = PermissionMode.notify;
 
-  /// Runtime permission-mode change (/mode <mode>).
+  /// Runtime permission-mode change (`/mode <mode>`).
   void setPermissionMode(PermissionMode mode) => _permissionMode = mode;
 
   PermissionMode get permissionMode => _permissionMode;
@@ -384,6 +384,8 @@ class Agent {
   }
 
   bool _needsApproval(ToolCall call) {
+    debugPrint('[agent] approval check: tool=${call.name} '
+        'mode=$_permissionMode args=${call.argumentsJson}');
     // Risky bash (installs/downloads/network) always needs approval,
     // even in auto mode.
     if (call.name == 'bash') {

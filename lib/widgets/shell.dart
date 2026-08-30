@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import 'chat/chat_pane.dart';
 import 'context/ctx_panel.dart';
@@ -9,7 +11,9 @@ import 'sidebar/side_panel.dart';
 /// 3-pane shell: sidebar · conversation (flex) · context.
 /// The sidebar and context panes are resizable by dragging their dividers;
 /// the conversation absorbs whatever space is left. Below 1100px logical the
-/// context pane hides, then the sidebar collapses to 56px.
+/// context pane hides, then the sidebar collapses to a 56px icon rail.
+/// Shortcuts: Ctrl+B sidebar, Ctrl+Shift+B context panel, Ctrl+N new chat,
+/// Ctrl+K focus chat search.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -20,13 +24,21 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   static const double _dividerWidth = 6.0;
   static const double _sidebarMin = 200.0;
-  static const double _sidebarMax = 400.0;
-  static const double _ctxMin = 220.0;
-  static const double _ctxMax = 480.0;
+  static const double _sidebarMax = 320.0;
+  static const double _ctxMin = 280.0;
+  static const double _ctxMax = 450.0;
   static const double _chatMin = 500.0;
+  static const double _railWidth = 56.0;
 
-  double _sidebarWidth = 264.0;
-  double _ctxWidth = 300.0;
+  double _sidebarWidth = 260.0;
+  double _ctxWidth = 320.0;
+  bool _sidebarCollapsed = false;
+  bool _ctxHidden = false;
+  int _searchFocusTick = 0;
+
+  void _toggleSidebar() => setState(() => _sidebarCollapsed = !_sidebarCollapsed);
+
+  void _toggleCtx() => setState(() => _ctxHidden = !_ctxHidden);
 
   void _resizeSidebar(double delta) {
     setState(() {
@@ -51,13 +63,15 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
     final width = MediaQuery.sizeOf(context).width;
-    final showCtx = width >= 1100;
+    // User toggle only wins when there is room; the breakpoint force-hides.
+    final showCtx = width >= 1100 && !_ctxHidden;
+    final collapsed = _sidebarCollapsed || width < 860;
     // Re-clamp on window resize: shrink the flex-side panes so the chat
     // keeps its minimum instead of overflowing when the window narrows.
     // The deficit is taken from the context pane first, then the sidebar.
-    var sidebarWidth = width >= 860 ? _sidebarWidth : 56.0;
+    var sidebarWidth = collapsed ? _railWidth : _sidebarWidth;
     var ctxWidth = _ctxWidth;
-    if (showCtx) {
+    if (showCtx && !collapsed) {
       final deficit = _chatMin -
           (width - sidebarWidth - ctxWidth - 2 * _dividerWidth);
       if (deficit > 0) {
@@ -67,7 +81,7 @@ class _AppShellState extends State<AppShell> {
       }
       _sidebarWidth = sidebarWidth;
       _ctxWidth = ctxWidth;
-    } else if (sidebarWidth > 56.0) {
+    } else if (!collapsed && sidebarWidth > _railWidth) {
       final deficit = _chatMin - (width - sidebarWidth - _dividerWidth);
       if (deficit > 0) {
         sidebarWidth -= deficit.clamp(0.0, sidebarWidth - _sidebarMin);
@@ -75,19 +89,38 @@ class _AppShellState extends State<AppShell> {
       _sidebarWidth = sidebarWidth;
     }
 
-    return Scaffold(
-      backgroundColor: theme.bg,
-      body: Row(
-        children: [
-          SidePanel(width: sidebarWidth),
-          if (width >= 860)
-            _Divider(onDrag: _resizeSidebar, color: theme.line),
-          const Expanded(child: ChatPane()),
-          if (showCtx) ...[
-            _Divider(onDrag: _resizeCtx, color: theme.line),
-            CtxPanel(width: _ctxWidth),
-          ],
-        ],
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true):
+            _toggleSidebar,
+        const SingleActivator(LogicalKeyboardKey.keyB,
+            control: true, shift: true): _toggleCtx,
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+            () => context.read<AppState>().newChat(),
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+            () => setState(() => _searchFocusTick++),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: theme.bg,
+          body: Row(
+            children: [
+              SidePanel(
+                width: sidebarWidth,
+                collapsed: collapsed,
+                searchFocusTick: _searchFocusTick,
+              ),
+              if (!collapsed)
+                _Divider(onDrag: _resizeSidebar, color: theme.line),
+              Expanded(child: ChatPane(showCtxToggle: showCtx, onToggleCtx: _toggleCtx)),
+              if (showCtx) ...[
+                _Divider(onDrag: _resizeCtx, color: theme.line),
+                CtxPanel(width: ctxWidth, onCollapse: _toggleCtx),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

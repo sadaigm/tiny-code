@@ -40,15 +40,16 @@ class TinyCodeApp extends StatelessWidget {
               debugShowCheckedModeBanner: false,
               theme: ThemeData.dark(useMaterial3: true).copyWith(
                 scaffoldBackgroundColor: theme.bg,
+                scrollbarTheme: theme.scrollbarTheme(),
               ),
               // Boots into the default (home) workspace; keyed on the dir so
               // changing workspace tears the old AppState (and its engine
-              // isolate) down and boots fresh. SelectionArea here (below the
-              // Navigator's Overlay) makes all text selectable/copyable.
-              home: SelectionArea(
-                child: _WorkspaceApp(
-                    dir: workspace.dir!, key: ValueKey(workspace.dir)),
-              ),
+              // isolate) down and boots fresh. No app-wide SelectionArea —
+              // it hijacks mouse events and kills click cursors on UI
+              // controls. Selection is scoped per content area (chat
+              // stream, thoughts log) instead; see selection_fix.md.
+              home: _WorkspaceApp(
+                  dir: workspace.dir!, key: ValueKey(workspace.dir)),
             );
           },
         ),

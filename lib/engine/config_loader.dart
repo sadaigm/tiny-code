@@ -121,6 +121,26 @@ class ConfigLoader {
     }
   }
 
+  /// Persist the full MCP server list into the `mcpServers` array of the
+  /// default profile in the effective agents.json (project wins over home).
+  Future<void> saveMcpServers(List<McpServerConfig> servers) async {
+    final file = await _tryRead(projectConfigFile) != null
+        ? projectConfigFile
+        : homeConfigFile;
+    final raw = await _tryRead(file);
+    if (raw == null) return;
+    try {
+      final profiles =
+          (jsonDecode(raw) as List<dynamic>).whereType<Map<String, dynamic>>().toList();
+      final profile = profiles.firstWhere((p) => p['name'] == 'default',
+          orElse: () => profiles.first);
+      profile['mcpServers'] = [for (final s in servers) s.toJson()];
+      await _writeFile(file, jsonEncode(profiles));
+    } catch (_) {
+      // Malformed config — skip persistence.
+    }
+  }
+
   /// Default workspace declared as `workspace` on the default profile of
   /// the home agents.json. Booting applies it to the whole project context
   /// (sessions, theme, file tree, agent cwd). Null when absent/invalid.

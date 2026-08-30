@@ -121,6 +121,12 @@ class McpReconnectCommand extends AgentCommand {
   final String name;
 }
 
+class McpDeleteCommand extends AgentCommand {
+  const McpDeleteCommand({required this.name});
+
+  final String name;
+}
+
 class UsageRequestCommand extends AgentCommand {
   const UsageRequestCommand();
 }

@@ -8,14 +8,16 @@ import 'package:tiny_code/theme/app_theme.dart';
 import 'package:tiny_code/widgets/shell.dart';
 
 void main() {
-  test('AppColors tokens match chat-redesign.html palette', () {
-    expect(AppColors.bg, const Color(0xFF0e1114));
-    expect(AppColors.panel, const Color(0xFF14181d));
-    expect(AppColors.stream, const Color(0xFF101418));
-    expect(AppColors.line, const Color(0xFF232a31));
-    expect(AppColors.ink, const Color(0xFFdde3e8));
-    expect(AppColors.accent, const Color(0xFFe8b45a));
-    expect(AppColors.tool, const Color(0xFF4fd6c8));
+  test('AppColors tokens match the UX redesign palette', () {
+    expect(AppColors.bg, const Color(0xFF121316));
+    expect(AppColors.panel, const Color(0xFF1A1B1E));
+    expect(AppColors.surface2, const Color(0xFF24262B));
+    expect(AppColors.surface3, const Color(0xFF2E3038));
+    expect(AppColors.line, const Color(0xFF2A2C33));
+    expect(AppColors.ink, const Color(0xFFF0F1F5));
+    expect(AppColors.dim, const Color(0xFF8C92A4));
+    expect(AppColors.accent, const Color(0xFFD4A359));
+    expect(AppColors.secondary, const Color(0xFF2DD4BF));
     expect(AppColors.err, const Color(0xFFef6b6b));
   });
 
@@ -55,13 +57,13 @@ void main() {
         child: const MaterialApp(home: AppShell()),
       ),
     );
-    expect(find.text('ACTIVE PLAN'), findsOneWidget);
+    expect(find.text('Thoughts'), findsOneWidget);
 
     tester.view.physicalSize = const Size(900, 900);
     // Not pumpAndSettle — the streaming cursor blinks forever.
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('ACTIVE PLAN'), findsNothing);
+    expect(find.text('Thoughts'), findsNothing);
     },
     timeout: const Timeout(Duration(seconds: 30)),
   );

@@ -81,7 +81,7 @@ class SkillPickerDialog extends StatelessWidget {
           SwitchListTile(
             value: app.config.activeSkills.contains(s.name),
             onChanged: (_) => app.toggleSkill(s.name),
-            activeColor: theme.tool,
+            activeThumbColor: theme.tool,
             title: Text(s.name,
                 style: TextStyle(color: theme.ink, fontSize: 13)),
             subtitle: Text(

@@ -1,18 +1,19 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
 import '../../state/command_registry.dart';
+import '../../state/log_store.dart';
+import '../../state/session_store_notifier.dart';
 import '../../state/workspace.dart';
 import '../../theme/app_theme.dart';
-import '../../state/log_store.dart';
 import '../markview/markdown.dart';
 import '../modals/approval_dialog.dart';
-import '../modals/mcp_picker.dart';
 import '../modals/option_picker.dart';
 import '../modals/plan_confirm_dialog.dart';
 import '../modals/recovery_dialog.dart';
@@ -21,7 +22,12 @@ import 'statusline.dart';
 
 /// Middle pane: topbar, message stream, input bar, statusline.
 class ChatPane extends StatelessWidget {
-  const ChatPane({super.key});
+  const ChatPane(
+      {super.key, this.showCtxToggle = false, this.onToggleCtx});
+
+  /// Whether the right context panel is visible (topbar toggle hint).
+  final bool showCtxToggle;
+  final VoidCallback? onToggleCtx;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +40,7 @@ class ChatPane extends StatelessWidget {
           color: theme.stream,
           child: Column(
             children: [
-              _Topbar(),
+              _Topbar(onToggleCtx: onToggleCtx),
               Expanded(child: _TurnList()),
               Divider(height: 1, thickness: 1, color: theme.line),
               const _InputBar(),
@@ -48,34 +54,269 @@ class ChatPane extends StatelessWidget {
         if (app.pendingPlan != null) PlanConfirmDialog(plan: app.pendingPlan!),
         if (app.pendingCrash != null)
           RecoveryDialog(message: app.pendingCrash!),
-        if (app.showMcpPicker) const McpPickerDialog(),
         if (app.showModePicker) const ModePickerDialog(),
         if (app.showSkillPicker) const SkillPickerDialog(),
-        if (app.showSettings) const SettingsDialog(),
+        if (app.showSettings) SettingsDialog(initialTab: app.settingsTab),
       ],
     );
   }
 }
 
-class _Topbar extends StatelessWidget {
+/// Canvas header: editable session title (double-tap), centered status pill
+/// (idle / thinking / running tool), and row actions on the right.
+class _Topbar extends StatefulWidget {
+  const _Topbar({this.onToggleCtx});
+
+  final VoidCallback? onToggleCtx;
+
+  @override
+  State<_Topbar> createState() => _TopbarState();
+}
+
+class _TopbarState extends State<_Topbar> {
+  bool _editing = false;
+  late final TextEditingController _title;
+
+  @override
+  void initState() {
+    super.initState();
+    // Eager init: a lazy `late final` would fire _currentTitle()'s
+    // context.read during dispose if the title was never shown.
+    _title = TextEditingController(text: _currentTitle());
+  }
+
+  String _currentTitle() {
+    final app = context.read<AppState>();
+    final sessions = context.read<SessionStoreNotifier>();
+    final id = app.activeSessionId;
+    for (final s in sessions.grouped(DateTime.now()).values.expand((l) => l)) {
+      if (s.id == id) return s.title ?? 'New chat';
+    }
+    return 'New chat';
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  void _commitRename() {
+    final app = context.read<AppState>();
+    final id = app.activeSessionId;
+    if (id != null && _title.text.trim().isNotEmpty) {
+      context.read<SessionStoreNotifier>().rename(id, _title.text);
+    }
+    setState(() => _editing = false);
+  }
+
+  Future<void> _exportMarkdown() async {
+    final app = context.read<AppState>();
+    final buf = StringBuffer();
+    for (final g in app.log.groups) {
+      if (g.userText != null) {
+        buf.writeln('## User\n\n${g.userText}\n');
+      }
+      for (final e in g.entries) {
+        switch (e.type) {
+          case LogEntryType.assistant:
+            buf.writeln('$e.text\n');
+          case LogEntryType.toolCall:
+            buf.writeln('> tool `${e.toolName}` ${e.text}');
+          case LogEntryType.toolResult:
+            buf.writeln('> ↳ ${e.text}');
+          default:
+            break;
+        }
+      }
+    }
+    final path = await FilePicker.platform.saveFile(
+        fileName: 'chat-${DateTime.now().toIso8601String().split('T').first}.md',
+        type: FileType.custom,
+        allowedExtensions: ['md']);
+    if (path != null) File(path).writeAsStringSync(buf.toString());
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
+    final app = context.watch<AppState>();
     return Container(
       decoration:
           BoxDecoration(border: Border(bottom: BorderSide(color: theme.line))),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
         children: [
-          Text('New chat',
-              style: TextStyle(
-                  color: theme.ink, fontSize: 14, fontWeight: FontWeight.w600)),
-          const Spacer(),
-          Text(
-            context.watch<AppState>().running ? 'running…' : 'idle',
-            style: TextStyle(color: theme.dim, fontSize: 12),
+          // Editable title: double-tap (or double-click) to rename inline.
+          GestureDetector(
+            onDoubleTap: () {
+              _title.text = _currentTitle();
+              setState(() => _editing = true);
+            },
+            child: _editing
+                ? SizedBox(
+                    width: 220,
+                    child: TextField(
+                      controller: _title,
+                      autofocus: true,
+                      style: TextStyle(color: theme.ink, fontSize: 13.5),
+                      onSubmitted: (_) => _commitRename(),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: theme.focusBorder(),
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      ),
+                    ),
+                  )
+                : Text(_currentTitle(),
+                    style: TextStyle(
+                        color: theme.ink,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600)),
           ),
+          const Spacer(),
+          StatusPill(running: app.running, log: app.log),
+          const Spacer(),
+          _TopbarAction(
+              label: 'Clear', onTap: () => context.read<AppState>().log.clear()),
+          const SizedBox(width: 14),
+          _TopbarAction(label: 'Export .md', onTap: _exportMarkdown),
+          if (widget.onToggleCtx != null) ...[
+            const SizedBox(width: 14),
+            _TopbarIcon(
+                icon: Icons.view_sidebar_outlined,
+                tooltip: 'Toggle context panel (Ctrl+Shift+B)',
+                onTap: widget.onToggleCtx!),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+class _TopbarAction extends StatefulWidget {
+  const _TopbarAction({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  State<_TopbarAction> createState() => _TopbarActionState();
+}
+
+class _TopbarActionState extends State<_TopbarAction> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: _hover ? theme.surface2 : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppColors.radius),
+          ),
+          child: Text(widget.label,
+              style: TextStyle(color: theme.dim, fontSize: 12)),
+        ),
+      ),
+    );
+  }
+}
+
+class _TopbarIcon extends StatelessWidget {
+  const _TopbarIcon(
+      {required this.icon, required this.tooltip, required this.onTap});
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: onTap,
+        icon: Icon(icon, size: 17, color: theme.dim),
+        hoverColor: theme.hover,
+        constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+}
+
+/// Centered execution-state pill: Idle (gray) · Agent thinking… (teal
+/// pulse) · Running tool… (gold pulse). Thinking vs tool is inferred from
+/// the tail of the log while a turn is running.
+class StatusPill extends StatefulWidget {
+  const StatusPill({super.key, required this.running, required this.log});
+
+  final bool running;
+  final LogStore log;
+
+  @override
+  State<StatusPill> createState() => _StatusPillState();
+}
+
+class _StatusPillState extends State<StatusPill>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    context.watch<LogStore>();
+
+    String label = 'Idle';
+    Color color = theme.dimmer;
+    if (widget.running) {
+      // Last entry being a toolCall (no result yet) means a tool is active.
+      final entries = widget.log.entries;
+      final inTool = entries.isNotEmpty &&
+          entries.last.type == LogEntryType.toolCall;
+      label = inTool ? 'Running tool…' : 'Agent thinking…';
+      color = inTool ? theme.accent : theme.secondary;
+    }
+
+    return FadeTransition(
+      opacity:
+          Tween(begin: 1.0, end: 0.45).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut)),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: theme.surface2,
+          border: Border.all(color: theme.line),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+                width: 7,
+                height: 7,
+                margin: const EdgeInsets.only(right: 7),
+                decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+            Text(label, style: TextStyle(color: theme.dim, fontSize: 11.5)),
+          ],
+        ),
       ),
     );
   }
@@ -134,7 +375,10 @@ class _TurnListState extends State<_TurnList> {
                 style: TextStyle(color: theme.dimmer, fontSize: 13)),
           )
         else
-          ListView.builder(
+          // Selectable message stream: drag-select across the conversation
+          // without hijacking the rest of the UI's mouse cursors.
+          SelectionArea(
+            child: ListView.builder(
             controller: _scroll,
             padding: const EdgeInsets.symmetric(vertical: 16),
             itemCount: groups.length + (app.running ? 1 : 0),
@@ -142,6 +386,7 @@ class _TurnListState extends State<_TurnList> {
               if (i == groups.length) return const _LiveTurn();
               return _groupWidget(context, groups[i], i);
             },
+            ),
           ),
         // Jump-to-bottom pill when unfollowed.
         if (!_following)
@@ -327,7 +572,10 @@ class _AgentHeaderState extends State<_AgentHeader> {
   @override
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
-    return MouseRegion(
+    // Inside the selectable stream — disabled selection keeps the fold
+    // toggle's click cursor and drag behavior intact.
+    return SelectionContainer.disabled(
+      child: MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -364,6 +612,7 @@ class _AgentHeaderState extends State<_AgentHeader> {
             ),
           ])),
         ),
+      ),
       ),
     );
   }
@@ -469,7 +718,35 @@ class _ModeSwitch extends StatelessWidget {
   }
 }
 
-/// Primary send button — the only filled control in the bar.
+/// Context-token badge, e.g. `1.2k tok`, from the engine usage events.
+class _TokenBadge extends StatelessWidget {
+  const _TokenBadge({required this.tokens});
+
+  final int tokens;
+
+  static String _format(int n) =>
+      n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: theme.surface2,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text('${_format(tokens)} tok',
+          style: TextStyle(
+              color: theme.dimmer,
+              fontSize: 10.5,
+              fontFamily: 'JetBrains Mono')),
+    );
+  }
+}
+
+/// Primary send button — gold fill when enabled, the only filled control
+/// in the bar.
 class _SendButton extends StatelessWidget {
   const _SendButton({required this.onTap, required this.enabled});
   final VoidCallback onTap;
@@ -486,20 +763,19 @@ class _SendButton extends StatelessWidget {
           duration: const Duration(milliseconds: 120),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
           decoration: BoxDecoration(
-            color: enabled ? theme.accentDim : theme.bg,
+            color: enabled ? theme.accentStrong : theme.bg,
             border: Border.all(
-                color: enabled ? theme.accent : theme.line, width: 1.5),
+                color: enabled ? theme.accentStrong : theme.line, width: 1.5),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             children: [
               Icon(Icons.arrow_upward,
-                  size: 16,
-                  color: enabled ? theme.accent : theme.dimmer),
+                  size: 16, color: enabled ? theme.bg : theme.dimmer),
               const SizedBox(width: 7),
               Text('Send',
                   style: TextStyle(
-                      color: enabled ? theme.accent : theme.dimmer,
+                      color: enabled ? theme.bg : theme.dimmer,
                       fontSize: 13.5,
                       fontWeight: FontWeight.w600)),
             ],
@@ -562,7 +838,9 @@ class _ThinkingRowState extends State<_ThinkingRow> {
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
     final lines = '· ${widget.text.split('\n').length} lines';
-    return MouseRegion(
+    // Inside the selectable stream — disable selection on the toggle row.
+    return SelectionContainer.disabled(
+      child: MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () => setState(() => _expanded = !_expanded),
@@ -584,6 +862,7 @@ class _ThinkingRowState extends State<_ThinkingRow> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -686,7 +965,7 @@ class _InputBarState extends State<_InputBar> {
       // (/home/user — huge tree) the recursive scan lags/freezes the UI.
       final isHome = context.read<WorkspaceState>().isHome;
       final m = isHome ? null : RegExp(r'@([\w./-]*)$').firstMatch(text);
-      debugPrint('[file-mention] text="$text" match=${m == null ? null : m.group(1)}');
+      debugPrint('[file-mention] text="$text" match=${m?.group(1)}');
       if (m != null) {
         _loadFileSuggestions(m.group(1)!);
         // Mention scan is in flight — the async completion owns _suggestions.
@@ -803,6 +1082,13 @@ class _InputBarState extends State<_InputBar> {
       }
     }
 
+    // Esc interrupts the running turn (any queued message is sent right
+    // after, when the turn ends).
+    if (key == LogicalKeyboardKey.escape &&
+        context.read<AppState>().running) {
+      context.read<AppState>().interrupt();
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.enter && !HardwareKeyboard.instance.isShiftPressed) {
       _send();
       return KeyEventResult.handled;
@@ -841,9 +1127,16 @@ class _InputBarState extends State<_InputBar> {
                   ),
                 Container(
                   decoration: BoxDecoration(
-                    color: theme.bg,
-                    borderRadius: BorderRadius.circular(12),
+                    color: theme.surface3,
+                    borderRadius: BorderRadius.circular(AppColors.radiusModal),
                     border: Border.all(color: theme.line),
+                    boxShadow: [
+                      BoxShadow(
+                        color: theme.bg.withValues(alpha: 0.5),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   padding: const EdgeInsets.all(10),
                   child: Column(
@@ -889,8 +1182,11 @@ class _InputBarState extends State<_InputBar> {
                           _IconAction(
                             icon: Icons.settings_outlined,
                             tooltip: 'Settings',
-                            onTap: () =>
-                                context.read<AppState>().showSettings = true,
+                            onTap: () {
+                              final app = context.read<AppState>();
+                              app.settingsTab = 0;
+                              app.showSettings = true;
+                            },
                           ),
                           const SizedBox(width: 12),
                           // Segmented mode switch: agent (tools) · plan · chat.
@@ -910,6 +1206,8 @@ class _InputBarState extends State<_InputBar> {
                             },
                           ),
                           const Spacer(),
+                          _TokenBadge(tokens: app.contextTokens),
+                          const SizedBox(width: 10),
                           if (app.running)
                             _StopButton(onTap: app.interrupt)
                           else

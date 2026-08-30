@@ -79,4 +79,20 @@ class SessionStoreNotifier extends ChangeNotifier {
     if (activeId == id) activeId = null;
     await refresh();
   }
+
+  /// Persist a new display title for the session (topbar inline rename).
+  Future<void> rename(String id, String title) async {
+    final s = await _store.load(id);
+    if (s == null) return;
+    final m = s.metadata;
+    s.metadata = SessionMetadata(
+      id: m.id,
+      createdAt: m.createdAt,
+      lastUpdatedAt: m.lastUpdatedAt,
+      title: title.trim().isEmpty ? null : title.trim(),
+      permissionMode: m.permissionMode,
+    );
+    await _store.save(s);
+    await refresh();
+  }
 }

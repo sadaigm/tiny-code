@@ -213,6 +213,21 @@ class McpManager {
     }
   }
 
+  /// Remove a server entirely: kill the connection, unregister its tools,
+  /// forget config and enabled state.
+  Future<void> delete(String name, ToolRegistry registry) async {
+    final server = _servers.remove(name);
+    if (server != null) {
+      for (final t in server.remoteTools) {
+        registry.unregister(t.definition.name);
+      }
+      server.process?.kill();
+      if (server.url != null) server.disposeHttpClient();
+    }
+    _configured.remove(name);
+    _enabled.remove(name);
+  }
+
   /// Re-fetch tools/list and diff against the registered set: unregister
   /// tools that disappeared server-side, add new ones to [remoteTools].
   /// Registration itself is the caller's job.
@@ -356,7 +371,7 @@ class _ConnectedServer {
   void notify(String method) {
     if (_isHttp) {
       // Fire-and-forget; the response (202/200) carries no result.
-      _httpRequest({'jsonrpc': '2.0', 'method': method}).catchError((_) {});
+      _httpRequest({'jsonrpc': '2.0', 'method': method}).catchError((_) => null);
       return;
     }
     process!.stdin.writeln(jsonEncode({'jsonrpc': '2.0', 'method': method}));

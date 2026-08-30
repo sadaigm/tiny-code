@@ -94,13 +94,17 @@ class EngineHost {
   void mcpReconnect(String name) =>
       _send(McpReconnectCommand(name: name));
 
+  /// Remove an MCP server: kill the connection, unregister tools, forget
+  /// config/enabled state. Persistence of the config change is AppState's job.
+  void mcpDelete(String name) => _send(McpDeleteCommand(name: name));
+
   void requestUsage() => _send(const UsageRequestCommand());
 
   /// Manual /compact: summarize the history now, bypassing the threshold.
   void requestCompact([String? instructions]) =>
       _send(CompactRequestCommand(instructions: instructions));
 
-  /// Runtime permission-mode change (settings panel / /mode <mode>).
+  /// Runtime permission-mode change (settings panel / `/mode <mode>`).
   void requestSetPermissionMode(PermissionMode mode) =>
       _send(SetPermissionModeCommand(mode));
 
@@ -140,6 +144,9 @@ Future<void> _engineMain(_Bootstrap bootstrap) async {
   await mcp.connectAll(bootstrap.config.mcpServers, agent.registry);
   var busy = false;
 
+  /// Messages sent while a turn is running, delivered when it ends.
+  final pendingMessages = <SendMessageCommand>[];
+
   SendPort? eventPort;
   void emit(AgentEvent e) => eventPort?.send(e);
 
@@ -148,6 +155,52 @@ Future<void> _engineMain(_Bootstrap bootstrap) async {
 
   final approvalBridge = <String, Completer<ApprovalDecision>>{};
   final askUserBridge = <String, Completer<AskUserResponse>>{};
+
+  /// One agent turn: run to completion, then persist the session.
+  /// Caller owns the busy flag and the running/turnDone status events.
+  Future<void> runTurn(SendMessageCommand msg) async {
+    await agent.run(
+      msg.text,
+      mode: msg.mode ?? AgentMode.agent,
+      continueSession: msg.continueSession,
+      cbs: AgentCallbacks(
+        onStep: (s) => emit(StepEvent(s)),
+        onText: (d) => emit(TextDeltaEvent(d)),
+        onReasoning: (d) => emit(ThinkingDeltaEvent(d)),
+        onModelError: (e) => emit(ModelErrorEvent(e.toString())),
+        onCompaction: (before, after) => emit(CompactionEvent(before, after)),
+        onApproval: (call) {
+          final id = const Uuid().v4();
+          final completer = Completer<ApprovalDecision>();
+          approvalBridge[id] = completer;
+          emit(ApprovalRequestEvent(id: id, call: call));
+          return completer.future;
+        },
+        onAskUser: (payload) {
+          final id = const Uuid().v4();
+          final completer = Completer<AskUserResponse>();
+          askUserBridge[id] = completer;
+          emit(AskUserEvent(id: id, payload: payload));
+          return completer.future;
+        },
+      ),
+    );
+    // Persist the turn (debounce-free for now; single write per turn).
+    if (sessionId != null && agent.getHistory().isNotEmpty) {
+      final existing = await store.load(sessionId!);
+      await store.save(Session(
+        metadata: SessionMetadata(
+          id: sessionId!,
+          createdAt: existing?.metadata.createdAt ?? DateTime.now(),
+          lastUpdatedAt: DateTime.now(),
+          title: existing?.metadata.title ??
+              (msg.text.length > 60 ? msg.text.substring(0, 60) : msg.text),
+          permissionMode: bootstrap.config.permissionMode,
+        ),
+        messages: agent.getHistory(),
+      ));
+    }
+  }
 
   cmdPort.listen((msg) async {
     // The host's event channel arrives as the first raw SendPort.
@@ -161,54 +214,23 @@ Future<void> _engineMain(_Bootstrap bootstrap) async {
 
     switch (msg) {
       case SendMessageCommand():
-        if (busy) return;
+        // A turn is running — queue instead of dropping; flushed when the
+        // turn ends (finish or interrupt) so the agent picks it up next.
+        if (busy) {
+          pendingMessages.add(msg);
+          return;
+        }
         busy = true;
         emit(const StatusEvent(running: true));
         try {
-          await agent.run(
-            msg.text,
-            mode: msg.mode ?? AgentMode.agent,
-            continueSession: msg.continueSession,
-            cbs: AgentCallbacks(
-              onStep: (s) => emit(StepEvent(s)),
-              onText: (d) => emit(TextDeltaEvent(d)),
-              onReasoning: (d) => emit(ThinkingDeltaEvent(d)),
-              onModelError: (e) => emit(ModelErrorEvent(e.toString())),
-              onCompaction: (before, after) => emit(CompactionEvent(before, after)),
-              onApproval: (call) {
-                final id = const Uuid().v4();
-                final completer = Completer<ApprovalDecision>();
-                approvalBridge[id] = completer;
-                emit(ApprovalRequestEvent(id: id, call: call));
-                return completer.future;
-              },
-              onAskUser: (payload) {
-                final id = const Uuid().v4();
-                final completer = Completer<AskUserResponse>();
-                askUserBridge[id] = completer;
-                emit(AskUserEvent(id: id, payload: payload));
-                return completer.future;
-              },
-            ),
-          );
-          // Persist the turn (debounce-free for now; single write per turn).
-          if (sessionId != null && agent.getHistory().isNotEmpty) {
-            final existing = await store.load(sessionId!);
-            await store.save(Session(
-              metadata: SessionMetadata(
-                id: sessionId!,
-                createdAt: existing?.metadata.createdAt ?? DateTime.now(),
-                lastUpdatedAt: DateTime.now(),
-                title: existing?.metadata.title ??
-                    (msg.text.length > 60 ? msg.text.substring(0, 60) : msg.text),
-                permissionMode: bootstrap.config.permissionMode,
-              ),
-              messages: agent.getHistory(),
-            ));
-          }
+          await runTurn(msg);
         } finally {
           busy = false;
           emit(const StatusEvent(running: false, turnDone: true));
+          if (pendingMessages.isNotEmpty) {
+            final next = pendingMessages.removeAt(0);
+            cmdPort.sendPort.send(next); // re-dispatch through the same path
+          }
         }
       case InterruptCommand():
         agent.interrupt();
@@ -236,6 +258,9 @@ Future<void> _engineMain(_Bootstrap bootstrap) async {
         emit(McpServersEvent(mcp.describe()));
       case McpReconnectCommand():
         await mcp.reconnect(msg.name, agent.registry);
+        emit(McpServersEvent(mcp.describe()));
+      case McpDeleteCommand():
+        await mcp.delete(msg.name, agent.registry);
         emit(McpServersEvent(mcp.describe()));
       case UsageRequestCommand():
         emit(UsageEvent(agent.usageStats()));

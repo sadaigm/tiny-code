@@ -55,7 +55,7 @@ class AppState extends ChangeNotifier {
   AskUserEvent? pendingAskUser;
 
   // Phase 7 state.
-  bool planMode = false; // next send goes to the engine in plan mode
+  bool planMode = false; // sends go to the engine in plan mode until the plan is confirmed
   bool chatMode = false; // next send goes to the engine in chat mode (no tools)
   String? pendingPlan; // plan markdown awaiting confirm
   String? _lastPlanRequest;
@@ -86,8 +86,19 @@ class AppState extends ChangeNotifier {
       return;
     }
     final plan = forcePlan ?? planMode;
+    // A boot-fresh chat has no session yet — mint one before the first
+    // turn so the engine persists it and plan tools write into
+    // `.tiny-cli/<id>/plan/` instead of the `default` folder.
+    if (activeSessionId == null) {
+      final id = const Uuid().v4();
+      host.newSession(id);
+      activeSessionId = id;
+    }
     log.add(LogEntry(type: LogEntryType.user, text: text));
-    streaming.begin();
+    // Only clear the streaming buffer when idle — wiping it mid-turn
+    // would erase the in-flight response before it can be committed.
+    // StatusEvent(running:true) resets it when the turn actually starts.
+    if (!running) streaming.begin();
     if (plan) _lastPlanRequest = text;
     _lastUserMessage = text;
     host.sendMessage(text,
@@ -96,21 +107,25 @@ class AppState extends ChangeNotifier {
             : chatMode
                 ? AgentMode.chat
                 : AgentMode.agent);
-    planMode = false;
+    // Plan mode is sticky: follow-up corrections stay in plan mode until
+    // the plan is confirmed (confirmPlan) — only chat is one-shot.
     chatMode = false;
     notifyListeners();
   }
 
   // ── Slash commands (T10.1) ─────────────────────────────────────────
 
-  /// /mcp picker state.
-  bool _showMcpPicker = false;
-  bool get showMcpPicker => _showMcpPicker;
-  set showMcpPicker(bool v) {
-    _showMcpPicker = v;
+  List<Map<String, dynamic>> mcpServers = const [];
+
+  /// Delete an MCP server: runtime removal in the engine (McpServersEvent
+  /// refreshes [mcpServers]) + persist the config change to agents.json.
+  Future<void> mcpDelete(String name) async {
+    host.mcpDelete(name);
+    config = config.copyWith(
+        mcpServers: config.mcpServers.where((s) => s.name != name).toList());
+    await configLoader.saveMcpServers(config.mcpServers);
     notifyListeners();
   }
-  List<Map<String, dynamic>> mcpServers = const [];
 
   /// /mode picker state.
   bool _showModePicker = false;
@@ -144,6 +159,9 @@ class AppState extends ChangeNotifier {
     _showSettings = v;
     notifyListeners();
   }
+
+  /// Tab the settings panel opens on (2 = MCP servers, set by /mcp).
+  int settingsTab = 0;
 
   /// Apply settings-panel choices for the rest of the session.
   void applySettings(
@@ -183,7 +201,8 @@ class AppState extends ChangeNotifier {
       case '/find':
         _find(args);
       case '/mcp':
-        showMcpPicker = true;
+        settingsTab = 2;
+        showSettings = true;
       case '/mode':
         // Direct switch: /mode <notify|auto-edit|auto>
         final requested = args.toLowerCase().replaceAll('_', '-');
@@ -268,6 +287,7 @@ class AppState extends ChangeNotifier {
   void confirmPlan() {
     final text = 'Proceed with the confirmed plan. Execute it step by step.';
     pendingPlan = null;
+    planMode = false; // plan approved → hand off to agent mode
     send(text);
   }
 
@@ -463,6 +483,14 @@ class AppState extends ChangeNotifier {
       switch (e) {
         case StepEvent(:final step):
           if (step.toolCall != null) {
+            // Text preceding a tool call is a complete assistant message —
+            // commit it now so the canvas shows discrete messages
+            // interleaved with tool receipts instead of one blob.
+            if (streaming.text.trim().isNotEmpty) {
+              log.add(
+                  LogEntry(type: LogEntryType.assistant, text: streaming.text));
+              streaming.begin(); // reset buffer, still live for more text
+            }
             log.add(LogEntry(
               type: LogEntryType.toolCall,
               text: step.toolCall!.argumentsJson,
@@ -493,6 +521,9 @@ class AppState extends ChangeNotifier {
         case StatusEvent():
           if (e.running) {
             running = true;
+            // Fresh turn (including one flushed from the engine's queue):
+            // start with an empty streaming buffer.
+            streaming.begin();
           } else {
             running = false;
             host.requestUsage(); // refreshes contextTokens for the statusline

@@ -10,9 +10,12 @@ import '../../theme/app_theme.dart';
 /// (expanded directory paths) lives in [AppState]; directories are listed
 /// on build and dot-entries (other than .tiny-cli) are hidden.
 class FileTree extends StatelessWidget {
-  const FileTree({super.key, required this.root});
+  const FileTree({super.key, required this.root, this.onOpenFile});
 
   final String root;
+
+  /// Double-click a file → open/focus its viewer tab.
+  final void Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +27,7 @@ class FileTree extends StatelessWidget {
       theme: theme,
       expanded: app.expandedTreeDirs,
       onToggle: app.toggleTreeDir,
+      onOpenFile: onOpenFile,
     );
   }
 }
@@ -38,6 +42,7 @@ class DirNode extends StatelessWidget {
     required this.theme,
     required this.expanded,
     required this.onToggle,
+    this.onOpenFile,
   });
 
   final Directory dir;
@@ -45,6 +50,7 @@ class DirNode extends StatelessWidget {
   final AppTheme theme;
   final Set<String> expanded;
   final void Function(String path) onToggle;
+  final void Function(String path)? onOpenFile;
 
   List<FileSystemEntity> _list() {
     try {
@@ -112,23 +118,29 @@ class DirNode extends StatelessWidget {
                       theme: theme,
                       expanded: expanded,
                       onToggle: onToggle,
+                      onOpenFile: onOpenFile,
                     )
                   else
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Row(
-                        children: [
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Text(e.path.split(RegExp(r'[/\\]')).last,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    color: theme.tool,
-                                    fontSize: 13,
-                                    fontFamily: 'monospace')),
-                          ),
-                        ],
+                    InkWell(
+                      onTap: () {},
+                      onDoubleTap: () => onOpenFile?.call(e.path),
+                      borderRadius: BorderRadius.circular(4),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Text(e.path.split(RegExp(r'[/\\]')).last,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: theme.tool,
+                                      fontSize: 13,
+                                      fontFamily: 'monospace')),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
               ],

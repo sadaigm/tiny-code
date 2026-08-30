@@ -18,6 +18,7 @@ import '../engine/session_store.dart';
 import 'log_store.dart';
 import 'session_store_notifier.dart';
 import '../engine_host/engine_isolate.dart';
+import 'tab_state.dart';
 
 /// App-level state: owns the engine host, translates events into stores.
 class AppState extends ChangeNotifier {
@@ -37,6 +38,7 @@ class AppState extends ChangeNotifier {
       SessionStoreNotifier(SessionStore(loader.sessionsDir)),
     );
     state._listen();
+    state.tabState = TabState(state)..ensureChatTab();
     return state;
   }
 
@@ -51,6 +53,18 @@ class AppState extends ChangeNotifier {
   bool running = false;
   bool _reportUsage = false; // /usage asks for the printed report
   String? activeSessionId;
+
+  /// Central-viewport tabs (chat sessions + file viewers). Set in [create].
+  late final TabState tabState;
+
+  /// Text the input bar should adopt (e.g. "@path explain this file" from a
+  /// file tab's action bar). Cleared once consumed.
+  String? pendingInput;
+
+  void setInput(String text) {
+    pendingInput = text;
+    notifyListeners();
+  }
   ApprovalRequestEvent? pendingApproval;
   AskUserEvent? pendingAskUser;
 

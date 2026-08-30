@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../state/app_state.dart';
+import '../state/tab_state.dart';
 import '../theme/app_theme.dart';
-import 'chat/chat_pane.dart';
 import 'context/ctx_panel.dart';
 import 'sidebar/side_panel.dart';
+import 'viewport/viewport_container.dart';
 
 /// 3-pane shell: sidebar · conversation (flex) · context.
 /// The sidebar and context panes are resizable by dragging their dividers;
@@ -96,7 +96,16 @@ class _AppShellState extends State<AppShell> {
         const SingleActivator(LogicalKeyboardKey.keyB,
             control: true, shift: true): _toggleCtx,
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            () => context.read<AppState>().newChat(),
+            () => context.read<TabState>().newTab(),
+        const SingleActivator(LogicalKeyboardKey.keyT, control: true):
+            () => context.read<TabState>().newTab(),
+        const SingleActivator(LogicalKeyboardKey.keyW, control: true):
+            () => context.read<TabState>()
+                .close(context.read<TabState>().activeTabId!),
+        const SingleActivator(LogicalKeyboardKey.tab, control: true):
+            () => context.read<TabState>().cycle(1),
+        const SingleActivator(LogicalKeyboardKey.tab,
+            control: true, shift: true): () => context.read<TabState>().cycle(-1),
         const SingleActivator(LogicalKeyboardKey.keyK, control: true):
             () => setState(() => _searchFocusTick++),
       },
@@ -113,7 +122,7 @@ class _AppShellState extends State<AppShell> {
               ),
               if (!collapsed)
                 _Divider(onDrag: _resizeSidebar, color: theme.line),
-              Expanded(child: ChatPane(showCtxToggle: showCtx, onToggleCtx: _toggleCtx)),
+              Expanded(child: ViewportContainer(showCtxToggle: showCtx, onToggleCtx: _toggleCtx)),
               if (showCtx) ...[
                 _Divider(onDrag: _resizeCtx, color: theme.line),
                 CtxPanel(width: ctxWidth, onCollapse: _toggleCtx),

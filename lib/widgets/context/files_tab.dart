@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
+import '../../state/tab_state.dart';
 import '../../theme/app_theme.dart';
 import 'file_tree.dart';
 
@@ -37,7 +38,10 @@ class _FilesTabState extends State<FilesTab> {
             value: _filter, onChanged: (v) => setState(() => _filter = v)),
         const SizedBox(height: 6),
         if (_filter.isEmpty)
-          FileTree(root: app.configLoader.projectDir)
+          FileTree(
+              root: app.configLoader.projectDir,
+              onOpenFile: (path) =>
+                  context.read<TabState>().openFile(path))
         else
           _FilteredFiles(root: app.configLoader.projectDir, filter: _filter),
       ],

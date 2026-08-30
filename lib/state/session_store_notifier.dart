@@ -60,6 +60,14 @@ class SessionStoreNotifier extends ChangeNotifier {
     };
   }
 
+  /// Metadata for one session, or null if not in the local list.
+  SessionMetadata? meta(String id) {
+    for (final m in _all) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
   Future<void> refresh() async {
     _all
       ..clear()

@@ -324,6 +324,77 @@ class _StatusPillState extends State<StatusPill>
 
 /// Message stream with auto-follow: sticks to the bottom while streaming,
 /// wheel-up exits follow into browse, pill jumps back.
+/// Empty-canvas welcome screen: brand mark, heading, and clickable
+/// suggestions that prefill the input bar via AppState.setInput.
+class _EmptyChat extends StatelessWidget {
+  const _EmptyChat();
+
+  static const _suggestions = [
+    'Explain the structure of this workspace',
+    'Summarize the changes in @file',
+    'Write tests for the selected code',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    final app = context.watch<AppState>();
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppColors.radius),
+                color: theme.accentDim,
+              ),
+              alignment: Alignment.center,
+              child:
+                  Text('▲', style: TextStyle(color: theme.accent, fontSize: 20)),
+            ),
+            const SizedBox(height: 14),
+            Text('Start a new chat',
+                style: TextStyle(
+                    color: theme.ink,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Text('Ask anything about your workspace — type below to begin.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.dim, fontSize: 13)),
+            const SizedBox(height: 22),
+            for (final s in _suggestions)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: InkWell(
+                  onTap: () => app.setInput(s),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 10, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: theme.surface2,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: theme.line),
+                    ),
+                    child: Text(s,
+                        style:
+                            TextStyle(color: theme.dim, fontSize: 13)),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TurnList extends StatefulWidget {
   @override
   State<_TurnList> createState() => _TurnListState();
@@ -370,10 +441,7 @@ class _TurnListState extends State<_TurnList> {
     return Stack(
       children: [
         if (groups.isEmpty)
-          Center(
-            child: Text('Message tiny-code…',
-                style: TextStyle(color: theme.dimmer, fontSize: 13)),
-          )
+          const _EmptyChat()
         else
           // Selectable message stream: drag-select across the conversation
           // without hijacking the rest of the UI's mouse cursors.
@@ -940,6 +1008,8 @@ class _InputBarState extends State<_InputBar> {
   int _suggestionIndex = 0;
   int _mentionSeq = 0; // token to drop stale/out-of-order file scans
 
+  AppState? _listenedApp;
+
   @override
   void initState() {
     super.initState();
@@ -949,10 +1019,38 @@ class _InputBarState extends State<_InputBar> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Listen once (the provider above the shell never changes identity).
+    final app = context.read<AppState>();
+    if (_listenedApp != app) {
+      _listenedApp?.removeListener(_onAppNotification);
+      _listenedApp = app;
+      app.addListener(_onAppNotification);
+    }
+  }
+
+  @override
   void dispose() {
+    _listenedApp?.removeListener(_onAppNotification);
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  /// File-tab actions ("Add to Context" / "Ask AI") and the empty-chat
+  /// suggestion chips drop a prefilled text on AppState. Consume it here —
+  /// in a listener, never in build/post-frame — so the text mutation doesn't
+  /// race SelectionArea's paragraph measurements (debugNeedsLayout assert).
+  void _onAppNotification() {
+    final pending = _listenedApp?.pendingInput;
+    if (pending == null) return;
+    _listenedApp!.pendingInput = null;
+    _controller.value = TextEditingValue(
+      text: pending,
+      selection: TextSelection.collapsed(offset: pending.length),
+    );
+    _focus.requestFocus();
   }
 
   void _refreshSuggestions() {

@@ -114,6 +114,7 @@ class _WorkspaceAppState extends State<_WorkspaceApp> {
             ChangeNotifierProvider.value(value: app.log),
             ChangeNotifierProvider.value(value: app.streaming),
             ChangeNotifierProvider.value(value: app.sessions),
+            ChangeNotifierProvider.value(value: app.tabState),
           ],
           child: const AppShell(),
         );

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../engine/models.dart';
 import '../../state/app_state.dart';
+import '../../state/tab_state.dart';
 import '../../state/session_store_notifier.dart';
 import '../../theme/app_theme.dart';
 import '../workspace_gate.dart';
@@ -60,7 +61,7 @@ class _SidePanelState extends State<SidePanel> {
       width: widget.width,
       color: theme.panel,
       child: widget.collapsed
-          ? _IconRail(onNewChat: () => context.read<AppState>().newChat())
+          ? _IconRail(onNewChat: () => context.read<TabState>().newTab())
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -254,7 +255,7 @@ class _NewChatButton extends StatelessWidget {
       child: Tooltip(
         message: 'New chat (Ctrl+N)',
         child: TextButton(
-          onPressed: () => context.read<AppState>().newChat(),
+          onPressed: () => context.read<TabState>().newTab(),
           style: TextButton.styleFrom(
             backgroundColor: theme.accentStrong,
             foregroundColor: theme.bg,
@@ -377,7 +378,7 @@ class _SessionTileState extends State<_SessionTile> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: () => context.read<AppState>().openSession(metadata.id),
+        onTap: () => context.read<TabState>().openChat(metadata.id),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 120),
           margin: const EdgeInsets.only(bottom: 2),

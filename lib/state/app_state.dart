@@ -17,6 +17,7 @@ import 'command_registry.dart';
 import '../engine/session_store.dart';
 import 'log_store.dart';
 import 'session_store_notifier.dart';
+import 'telemetry_store.dart';
 import '../engine_host/engine_isolate.dart';
 import 'tab_state.dart';
 
@@ -48,6 +49,15 @@ class AppState extends ChangeNotifier {
   final SessionStoreNotifier sessions;
 
   final LogStore log = LogStore();
+  final TelemetryStore telemetry = TelemetryStore();
+
+  /// Canvas view switch: false = chat stream, true = session dashboard.
+  bool dashboardView = false;
+
+  void toggleDashboard() {
+    dashboardView = !dashboardView;
+    notifyListeners();
+  }
   final StreamingTextNotifier streaming = StreamingTextNotifier();
 
   bool running = false;
@@ -190,9 +200,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// Persist mode settings into agents.json `settings` object.
-  Future<void> saveSettings() async {
+  Future<void> saveSettings({String? theme}) async {
     await configLoader.saveSettings(
       permissionMode: config.permissionMode.name,
+      theme: theme,
     );
   }
 
@@ -207,6 +218,7 @@ class AppState extends ChangeNotifier {
         _info('Commands:\n${kCommands.map((c) => '  ${c.name} ${c.argsHint}'.padRight(22) + c.description).join('\n')}');
       case '/clear':
         log.clear();
+        telemetry.clear();
       case '/stop':
         interrupt();
       case '/usage':
@@ -327,6 +339,7 @@ class AppState extends ChangeNotifier {
     running = false;
     streaming.end();
     log.clear();
+    telemetry.clear();
     planSteps.clear();
     workingFiles.clear();
     pendingPlan = null;
@@ -345,6 +358,7 @@ class AppState extends ChangeNotifier {
     running = false;
     streaming.end();
     log.replaceAll(_entriesFromHistory(session.messages));
+    telemetry.restoreFromMessages(session.messages);
     sessions.setActive(id);
     // Resume context panel state from this session's plan file on disk.
     planSteps.clear();
@@ -511,6 +525,7 @@ class AppState extends ChangeNotifier {
               toolName: step.toolCall!.name,
             ));
             log.add(LogEntry(type: LogEntryType.toolResult, text: step.toolResult ?? ''));
+            telemetry.record(step);
             _trackContext(step.toolCall!.name, step.toolCall!.argumentsJson);
           }
         case TextDeltaEvent(:final delta):
@@ -567,6 +582,7 @@ class AppState extends ChangeNotifier {
         case UsageEvent(:final usage):
           contextTokens =
               (usage['contextTokens'] as num?)?.toInt() ?? contextTokens;
+          telemetry.setContextTokens(contextTokens);
           if (!_reportUsage) {
             notifyListeners(); // silent refresh (statusline meter)
             return;

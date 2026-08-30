@@ -6,10 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../engine/models.dart' show PermissionMode;
+import '../../engine/skills.dart' show discoverSkills;
+import '../../platform_env_io.dart' show homeDir;
 import '../../state/app_state.dart';
 import '../../state/command_registry.dart';
 import '../../state/log_store.dart';
 import '../../state/session_store_notifier.dart';
+import '../dashboard/session_dashboard.dart';
 import '../../state/workspace.dart';
 import '../../theme/app_theme.dart';
 import '../markview/markdown.dart';
@@ -41,7 +45,10 @@ class ChatPane extends StatelessWidget {
           child: Column(
             children: [
               _Topbar(onToggleCtx: onToggleCtx),
-              Expanded(child: _TurnList()),
+              Expanded(
+                  child: app.dashboardView
+                      ? const SessionDashboard()
+                      : _TurnList()),
               Divider(height: 1, thickness: 1, color: theme.line),
               const _InputBar(),
             ],
@@ -176,6 +183,8 @@ class _TopbarState extends State<_Topbar> {
                         fontWeight: FontWeight.w600)),
           ),
           const Spacer(),
+          _ViewToggle(view: app.dashboardView),
+          const Spacer(),
           StatusPill(running: app.running, log: app.log),
           const Spacer(),
           _TopbarAction(
@@ -189,6 +198,65 @@ class _TopbarState extends State<_Topbar> {
                 tooltip: 'Toggle context panel (Ctrl+Shift+B)',
                 onTap: widget.onToggleCtx!),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Canvas view switch: 💬 Chat Stream | 📊 Session Dashboard.
+class _ViewToggle extends StatelessWidget {
+  const _ViewToggle({required this.view});
+
+  final bool view; // false = chat stream, true = dashboard
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    Widget seg(String label, IconData icon, bool active, VoidCallback onTap) =>
+        MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: active ? theme.accentDim : Colors.transparent,
+                borderRadius: BorderRadius.circular(AppColors.radius),
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, size: 13, color: active ? theme.accent : theme.dim),
+                  const SizedBox(width: 5),
+                  Text(label,
+                      style: TextStyle(
+                          color: active ? theme.ink : theme.dim, fontSize: 12)),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: theme.surface2,
+        borderRadius: BorderRadius.circular(AppColors.radius),
+        border: Border.all(color: theme.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          seg('Chat Stream', Icons.chat_bubble_outline, !view,
+              () {
+            final app = context.read<AppState>();
+            if (app.dashboardView) app.toggleDashboard();
+          }),
+          seg('Dashboard', Icons.insights_outlined, view, () {
+            final app = context.read<AppState>();
+            if (!app.dashboardView) app.toggleDashboard();
+          }),
         ],
       ),
     );
@@ -1008,6 +1076,11 @@ class _InputBarState extends State<_InputBar> {
   int _suggestionIndex = 0;
   int _mentionSeq = 0; // token to drop stale/out-of-order file scans
 
+  // Active selector command (/skills, /mcp, /mode): popover shows its
+  // sub-options instead of the command list.
+  CommandSpec? _selectorCmd;
+  int _selectorIndex = 0;
+
   AppState? _listenedApp;
 
   @override
@@ -1118,7 +1191,126 @@ class _InputBarState extends State<_InputBar> {
     });
   }
 
+  // ── Selector commands (plan step 3) ───────────────────────────────
+
+  void _openSelector(CommandSpec spec) {
+    _controller.clear();
+    setState(() {
+      _suggestions = const [];
+      _selectorCmd = spec;
+      _selectorIndex = 0;
+    });
+    _focus.requestFocus();
+  }
+
+  void _closeSelector() => setState(() => _selectorCmd = null);
+
+  /// One selectable row in the selector popover.
+  /// [onPick] toggles/applies; return true to keep the popover open
+  /// (multi-select), false to close it (single-select).
+  List<_SelectorOption> _selectorOptions(BuildContext context) {
+    final app = context.read<AppState>();
+    switch (_selectorCmd!.name) {
+      case '/skills':
+        final skills = discoverSkills(app.configLoader.projectDir, homeDir);
+        if (skills.isEmpty) {
+          return [
+            _SelectorOption(
+                label: 'No skills discovered',
+                sublabel: '.agents/skills/*/SKILL.md',
+                selected: false,
+                onPick: (_) => false)
+          ];
+        }
+        return [
+          for (final s in skills)
+            _SelectorOption(
+              label: s.name,
+              sublabel: s.description.split('\n').first,
+              selected: app.config.activeSkills.contains(s.name),
+              onPick: (_) {
+                app.toggleSkill(s.name);
+                return true; // multi-toggle stays open
+              },
+            )
+        ];
+      case '/mcp':
+        final servers = app.mcpServers;
+        if (servers.isEmpty) {
+          return [
+            _SelectorOption(
+                label: 'No MCP servers configured',
+                sublabel: 'Add one in Settings → MCP',
+                selected: false,
+                onPick: (_) => false)
+          ];
+        }
+        return [
+          for (final s in servers)
+            _SelectorOption(
+              label: s['name'] as String,
+              sublabel: '${s['toolCount'] as int? ?? 0} tools wired',
+              selected: s['enabled'] as bool? ?? true,
+              onPick: (_) {
+                app.host.mcpToggle(s['name'] as String,
+                    !(s['enabled'] as bool? ?? true));
+                return true; // toggle stays open
+              },
+            )
+        ];
+      case '/mode':
+        return [
+          for (final m in PermissionMode.values)
+            _SelectorOption(
+              label: m.name,
+              sublabel: switch (m) {
+                PermissionMode.notify => 'Ask before every tool call',
+                PermissionMode.autoEdit => 'Auto-approve edits, ask for risky bash',
+                PermissionMode.auto => 'No approval prompts',
+              },
+              selected: app.config.permissionMode == m,
+              onPick: (_) {
+                app.handleCommand('/mode ${m.name}');
+                return false; // single-select closes
+              },
+            )
+        ];
+      default:
+        return const [];
+    }
+  }
+
+  void _pickSelectorOption(int i) {
+    final opts = _selectorOptions(context);
+    if (i >= opts.length) return;
+    final keepOpen = opts[i].onPick(i);
+    if (!keepOpen) {
+      _closeSelector();
+    } else {
+      setState(() {}); // refresh checkmarks
+    }
+  }
+
   void _applySuggestion(String s) {
+    final spec = commandByName(s);
+    if (spec != null) {
+      switch (spec.type) {
+        case CommandType.selector:
+          _openSelector(spec);
+          return;
+        case CommandType.input:
+          _controller.text = '$s ';
+          _controller.selection =
+              TextSelection.collapsed(offset: _controller.text.length);
+          setState(() => _suggestions = const []);
+          return;
+        case CommandType.direct:
+          _controller.clear();
+          setState(() => _suggestions = const []);
+          context.read<AppState>().handleCommand(s);
+          return;
+      }
+    }
     final text = _controller.text;
     if (text.startsWith('/') && !text.contains(' ')) {
       _controller.text = '$s ';
@@ -1133,6 +1325,14 @@ class _InputBarState extends State<_InputBar> {
   void _send() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    // Typing a selector command in full gets the same inline picker.
+    final spec = commandByName(text);
+    if (spec?.type == CommandType.selector) {
+      _controller.clear();
+      setState(() => _suggestions = const []);
+      _openSelector(spec!);
+      return;
+    }
     if (_history.isEmpty || _history.last != text) _history.add(text);
     _historyIndex = -1;
     _controller.clear();
@@ -1157,6 +1357,28 @@ class _InputBarState extends State<_InputBar> {
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
     final key = e.logicalKey;
+
+    // Selector popover navigation (plan step 5).
+    if (_selectorCmd != null) {
+      final count = _selectorOptions(context).length;
+      if (key == LogicalKeyboardKey.arrowDown && count > 0) {
+        setState(() => _selectorIndex = (_selectorIndex + 1) % count);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowUp && count > 0) {
+        setState(
+            () => _selectorIndex = (_selectorIndex - 1) % count);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter && count > 0) {
+        _pickSelectorOption(_selectorIndex.clamp(0, count - 1));
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        _closeSelector();
+        return KeyEventResult.handled;
+      }
+    }
 
     // Autocomplete navigation takes priority while the popover is open.
     if (_suggestions.isNotEmpty) {
@@ -1217,7 +1439,15 @@ class _InputBarState extends State<_InputBar> {
             constraints: const BoxConstraints(maxWidth: 760),
             child: Column(
               children: [
-                if (_suggestions.isNotEmpty)
+                if (_selectorCmd != null)
+                  _SelectorPopover(
+                    command: _selectorCmd!,
+                    options: _selectorOptions(context),
+                    selectedIndex: _selectorIndex,
+                    onPick: _pickSelectorOption,
+                    onClose: _closeSelector,
+                  )
+                else if (_suggestions.isNotEmpty)
                   _AutocompletePopover(
                     items: _suggestions,
                     selectedIndex: _suggestionIndex,
@@ -1334,6 +1564,157 @@ class _InputBarState extends State<_InputBar> {
                 const Expanded(child: Statusline()),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One row of a selector popover. [onPick] receives the row index and
+/// returns whether to keep the popover open (multi-toggle).
+class _SelectorOption {
+  const _SelectorOption({
+    required this.label,
+    required this.sublabel,
+    required this.selected,
+    required this.onPick,
+  });
+
+  final String label;
+  final String sublabel;
+  final bool selected;
+  final bool Function(int index) onPick;
+}
+
+/// Sub-options of a selector command (/skills, /mcp, /mode) shown in the
+/// same popover slot as the command list — breadcrumb header, clickable
+/// rows with a check state, keyboard hint footer.
+class _SelectorPopover extends StatelessWidget {
+  const _SelectorPopover({
+    required this.command,
+    required this.options,
+    required this.selectedIndex,
+    required this.onPick,
+    required this.onClose,
+  });
+
+  final CommandSpec command;
+  final List<_SelectorOption> options;
+  final int selectedIndex;
+  final void Function(int index) onPick;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<AppTheme>();
+    final title = command.name.substring(1); // '/skills' → 'Skills'
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      constraints: const BoxConstraints(maxHeight: 300),
+      decoration: BoxDecoration(
+        color: theme.surface3,
+        borderRadius: BorderRadius.circular(AppColors.radiusModal),
+        border: Border.all(color: theme.line),
+        boxShadow: [
+          BoxShadow(
+            color: theme.bg.withValues(alpha: 0.5),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Breadcrumb header: Commands › Skills + close.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 6, 8),
+            child: Row(
+              children: [
+                Text('COMMANDS',
+                    style: TextStyle(
+                        color: theme.dimmer,
+                        fontSize: 10,
+                        letterSpacing: 0.8)),
+                const SizedBox(width: 6),
+                Icon(Icons.chevron_right, size: 13, color: theme.dimmer),
+                const SizedBox(width: 6),
+                Text(title.toUpperCase(),
+                    style: TextStyle(
+                        color: theme.accent,
+                        fontSize: 10,
+                        letterSpacing: 0.8,
+                        fontWeight: FontWeight.w600)),
+                const Spacer(),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.close, size: 15, color: theme.dimmer),
+                  tooltip: 'Close (Esc)',
+                  onPressed: onClose,
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, thickness: 1, color: theme.line),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: options.length,
+              itemBuilder: (context, i) {
+                final opt = options[i];
+                final highlighted = i == selectedIndex;
+                return InkWell(
+                  onTap: () => onPick(i),
+                  onHover: (_) {},
+                  child: Container(
+                    color: highlighted ? theme.hover : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 18,
+                          child: Icon(
+                            opt.selected
+                                ? Icons.check_box
+                                : Icons.check_box_outline_blank,
+                            size: 16,
+                            color: opt.selected
+                                ? theme.tool
+                                : theme.dimmer,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(opt.label,
+                                  style: TextStyle(
+                                      color: theme.ink, fontSize: 13)),
+                              if (opt.sublabel.isNotEmpty)
+                                Text(opt.sublabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: theme.dim, fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Divider(height: 1, thickness: 1, color: theme.line),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            child: Text('↑↓ navigate · ⏎ select · Esc close',
+                style: TextStyle(color: theme.dimmer, fontSize: 10.5)),
           ),
         ],
       ),

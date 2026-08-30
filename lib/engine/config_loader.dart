@@ -99,7 +99,7 @@ class ConfigLoader {
 
   /// Persist settings-panel choices into the `settings` object of the
   /// default profile in the effective agents.json (project wins over home).
-  Future<void> saveSettings({String? permissionMode, String? agentMode}) async {
+  Future<void> saveSettings({String? permissionMode, String? agentMode, String? theme}) async {
     final file = await _tryRead(projectConfigFile) != null
         ? projectConfigFile
         : homeConfigFile;
@@ -114,10 +114,30 @@ class ConfigLoader {
           Map<String, dynamic>.from(profile['settings'] as Map? ?? {});
       if (permissionMode != null) settings['permissionMode'] = permissionMode;
       if (agentMode != null) settings['agentMode'] = agentMode;
+      if (theme != null) settings['theme'] = theme;
       profile['settings'] = settings;
       await _writeFile(file, jsonEncode(profiles));
     } catch (_) {
       // Malformed config — skip persistence.
+    }
+  }
+
+  /// Persisted theme choice ('dark' | 'light') from the `settings` object
+  /// of the default profile in the effective agents.json. Null when unset.
+  Future<String?> loadTheme() async {
+    final file = await _tryRead(projectConfigFile) != null
+        ? projectConfigFile
+        : homeConfigFile;
+    final raw = await _tryRead(file);
+    if (raw == null) return null;
+    try {
+      final profiles =
+          (jsonDecode(raw) as List<dynamic>).whereType<Map<String, dynamic>>().toList();
+      final profile = profiles.firstWhere((p) => p['name'] == 'default',
+          orElse: () => profiles.first);
+      return (profile['settings'] as Map?)?['theme'] as String?;
+    } catch (_) {
+      return null;
     }
   }
 

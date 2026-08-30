@@ -85,8 +85,15 @@ class _WorkspaceAppState extends State<_WorkspaceApp> {
         Directory(widget.dir),
       ]);
     });
-    _future = AppState.create(projectDir: widget.dir)
-        .then((app) => _created = app);
+    _future = AppState.create(projectDir: widget.dir).then((app) async {
+      // Restore the persisted light/dark choice from agents.json
+      // (`settings.theme`) — deferred like loadOverrides above.
+      final saved = await app.configLoader.loadTheme();
+      if (mounted && saved != null) {
+        context.read<AppTheme>().setDark(saved == 'dark');
+      }
+      return _created = app;
+    });
   }
 
   @override

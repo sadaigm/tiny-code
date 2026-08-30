@@ -22,7 +22,11 @@ class _ThemeToggle extends StatelessWidget {
           MouseRegion(
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
-              onTap: () => context.read<AppTheme>().setDark(mode == 'dark'),
+              onTap: () {
+                context.read<AppTheme>().setDark(mode == 'dark');
+                // Persist alongside permissionMode in `settings`.
+                context.read<AppState>().saveSettings(theme: mode);
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 margin: const EdgeInsets.only(right: 8),

@@ -26,8 +26,8 @@ jobs:
       - name: Rename installer
         shell: pwsh
         run: |
-          $setup = Get-ChildItem build/windows/x64/installer -Filter *.exe | Select-Object -First 1
-          if (-not $setup) { Write-Error "No installer .exe found in build/windows/x64/installer"; exit 1 }
+          $setup = Get-ChildItem build/windows/x64/installer/Release -Filter *-Installer.exe | Select-Object -First 1
+          if (-not $setup) { Write-Error "No installer .exe found in build/windows/x64/installer/Release"; exit 1 }
           Write-Host "Found installer: $($setup.FullName)"
           Move-Item $setup.FullName TinyCode-Setup-windows-x64.exe
       - uses: actions/upload-artifact@v4

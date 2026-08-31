@@ -26,7 +26,10 @@ jobs:
       - name: Rename installer
         shell: pwsh
         run: |
-          Move-Item (Get-ChildItem build/windows/x64/runner/Release/*_setup.exe | Select-Object -First 1) TinyCode-Setup-windows-x64.exe
+          $setup = Get-ChildItem -Recurse -Filter *_setup.exe build | Select-Object -First 1
+          if (-not $setup) { Get-ChildItem -Recurse build -Filter *.exe | ForEach-Object { Write-Host $_.FullName }; exit 1 }
+          Write-Host "Found installer: $($setup.FullName)"
+          Move-Item $setup.FullName TinyCode-Setup-windows-x64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: TinyCode-Setup-windows-x64
@@ -74,8 +77,7 @@ jobs:
       - name: Package .AppImage and .deb (fastforge)
         run: |
           dart pub global activate flutter_distributor
-          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
-          fastforge package --platform linux --targets appimage,deb --skip-clean
+          dart pub global run flutter_distributor:fastforge package --platform linux --targets appimage,deb --skip-clean
       - name: Rename outputs
         run: |
           ls dist/*/

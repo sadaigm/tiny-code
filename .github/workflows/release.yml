@@ -76,6 +76,9 @@ jobs:
       - run: flutter build linux --release
       - name: Package .AppImage and .deb (fastforge)
         run: |
+          sudo curl -L -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
           dart pub global activate fastforge
           "$HOME/.pub-cache/bin/fastforge" package --platform linux --targets appimage,deb --skip-clean
       - name: Rename outputs

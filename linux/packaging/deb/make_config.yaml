@@ -1,0 +1,16 @@
+display_name: Tiny Code
+package_name: tiny-code
+icon: assets/icon/icon.png
+maintainer:
+  name: sadaigm
+  email: sadaigm@users.noreply.github.com
+priority: optional
+section: x11
+installed_size: 26985178
+keywords:
+  - code
+  - ai
+  - chat
+categories:
+  - Development
+  - Utility

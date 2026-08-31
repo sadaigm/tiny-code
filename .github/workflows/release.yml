@@ -1,0 +1,108 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Build Setup.exe (Inno Setup via inno_bundle)
+        run: dart run inno_bundle
+      - name: Rename installer
+        shell: pwsh
+        run: |
+          Move-Item (Get-ChildItem build/windows/x64/runner/Release/*_setup.exe | Select-Object -First 1) TinyCode-Setup-windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TinyCode-Setup-windows-x64
+          path: TinyCode-Setup-windows-x64.exe
+
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-13, arch: x64 }
+          - { runner: macos-14, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - name: Build .dmg (create-dmg)
+        run: |
+          brew install create-dmg
+          APP=$(ls -d build/macos/Build/Products/Release/*.app | head -n1)
+          create-dmg --volname "Tiny Code" --skip-jenkins --no-internet-enable \
+            "TinyCode-macos-${{ matrix.arch }}.dmg" "$APP" || true
+          test -f "TinyCode-macos-${{ matrix.arch }}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TinyCode-macos-${{ matrix.arch }}
+          path: TinyCode-macos-${{ matrix.arch }}.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev libsecret-1-dev libfuse2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Package .AppImage and .deb (fastforge)
+        run: |
+          dart pub global activate flutter_distributor
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+          fastforge package --platform linux --targets appimage,deb --skip-clean
+      - name: Rename outputs
+        run: |
+          ls dist/*/
+          for f in dist/*/tiny_code-*.AppImage; do mv "$f" TinyCode-linux-x64.AppImage; done
+          for f in dist/*/tiny_code-*.deb; do mv "$f" TinyCode-linux-x64.deb; done
+          test -f TinyCode-linux-x64.AppImage && test -f TinyCode-linux-x64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TinyCode-linux-x64
+          path: |
+            TinyCode-linux-x64.AppImage
+            TinyCode-linux-x64.deb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          files: |
+            TinyCode-Setup-windows-x64.exe
+            TinyCode-macos-x64.dmg
+            TinyCode-macos-arm64.dmg
+            TinyCode-linux-x64.AppImage
+            TinyCode-linux-x64.deb

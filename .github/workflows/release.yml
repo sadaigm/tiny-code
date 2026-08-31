@@ -76,8 +76,8 @@ jobs:
       - run: flutter build linux --release
       - name: Package .AppImage and .deb (fastforge)
         run: |
-          dart pub global activate flutter_distributor
-          dart pub global run flutter_distributor:fastforge package --platform linux --targets appimage,deb --skip-clean
+          dart pub global activate fastforge
+          "$HOME/.pub-cache/bin/fastforge" package --platform linux --targets appimage,deb --skip-clean
       - name: Rename outputs
         run: |
           ls dist/*/
